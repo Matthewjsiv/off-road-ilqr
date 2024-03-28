@@ -1,10 +1,13 @@
 import numpy as np
 import torch
 from utils import *
-
+import time
+from utils import *
+import matplotlib.pyplot as plt
+import cv2
 
 class ILQR(object):
-    def __init__(self, model, Q, R, Qf, iterations = 500, tol = 1e-3):
+    def __init__(self, model, Q, R, Qf, iterations = 1, tol = 1e-3):
         self.model = model
         self.iterations = iterations
         self.tol = tol
@@ -20,22 +23,32 @@ class ILQR(object):
         for now - X - Nx3, U - (N-1)x2
         """
 
-        self.obs = observation
+        now = time.perf_counter()
+
+        # self.obs = observation
+        self.costmap = observation['costmap']
+        self.obs = observation['state']
+        self.res = observation['res']
 
         Xi = Xref[0]
         U = Uref
 
         #X
         X = self.model.rollout(Xi.unsqueeze(0), U.unsqueeze(0))
+        # print(X)
         X = X[0]
+
 
         for i in range(self.iterations):
 
+            # now = time.perf_counter()
             d,K, delta_J = self.backward_pass(X, U, Xref, Uref)
-            X,u, J = self.forward_pass(X,U,d,K)
+            # X,u, J = self.forward_pass(X,U,d,K)
 
-            if delta_J < self.tol:
-                return X, U, K
+            # if delta_J < self.tol:
+                # return X, U, K
+
+        print(time.perf_counter() - now)
 
         print("FAILED TO CONVERGE :o")
         return None
@@ -52,8 +65,13 @@ class ILQR(object):
         dJdx2, dJdx = self.terminal_cost_expansion(X[-1].unsqueeze(0), Xref[-1].unsqueeze(0))
         dJ = 0.0
 
+        # print(X)
+        self.costmap_expansion(X)
+
         for k in range(N-2,-1,-1):
-            dJdx2, dJdx, dJdu2, dJdu = self.stage_cost_expansion(X[k].unsqueeze(0), U[k].unsqueeze(0), Xref[k].unsqueeze(0), Uref[k].unsqueeze(0))
+            dJdx2, dJdx, dJdu2, dJdu = self.stage_cost_expansion(X[k].unsqueeze(0), U[k].unsqueeze(0), Xref[k].unsqueeze(0), Uref[k].unsqueeze(0), k)
+
+            # print(dJdx2.shape, dJdx.shape)
 
             #TODO actually do this
             A = torch.zeros([3,3])
@@ -117,21 +135,69 @@ class ILQR(object):
 
         return tracking_cost + costmap_cost
 
-    def stage_cost_expansion(self, x, u, xref, uref):
+    def stage_cost_expansion(self, x, u, xref, uref, k):
         dtrackingdx = self.Q @ (x-xref).T
         #TODO actually do this
         dcostmapdx = torch.zeros([3,1])
+        dcostmapdx[:2] = self.dcostmapdx[k].view(2,1)
         dJdx = dtrackingdx + dcostmapdx
 
         dtrackingdx2 = self.Q
         #TODO actually do this
         dcostmapdx2 = torch.zeros([3,3])
+        # print(self.dcostmapdx2[k,:2].view(2,1).shape)
+        dcostmapdx2[0,:2] = self.dcostmapdx2[k,:2].view(1,2)
+        dcostmapdx2[1,:2] = self.dcostmapdx2[k,2:].view(1,2)
         dJdx2 = dtrackingdx2 + dcostmapdx2
 
         dJdu = self.R @ (u-uref).T
         dJdu2 = self.R
 
         return dJdx2, dJdx, dJdu2, dJdu
+
+    def costmap_expansion(self, X):
+        costmap = self.costmap
+        odom = self.obs
+        res = self.res
+        pose_se3 = pose_msg_to_se3(odom)
+        # print(odom)
+        #we're just using this for rotation
+        trajs = transformed_lib(pose_se3, X)
+        # print(X)
+        # print(trajs)
+        trajs_disc = ((trajs - np.array([-30., -30])) / res).long()
+        # print(trajs_disc[:5])
+
+        # costmap[trajs_disc[:,0],trajs_disc[:,1]] = 1
+        # # print(costmap.shape)
+        # plt.imshow(costmap)
+        # plt.show()
+        # cv2.imshow('test', costmap.cpu().numpy())
+        # cv2.waitKey(1)
+
+        #TODO THESE MIGHT NEED TO BE FLIPPED
+        dcx,dcy = torch.gradient(costmap)
+
+        dcxx,dcxy = torch.gradient(dcx)
+
+        dcyx,dcyy = torch.gradient(dcy)
+
+        dcx_traj = dcx[trajs_disc[:,0], trajs_disc[:,1]]
+        dcy_traj = dcy[trajs_disc[:,0], trajs_disc[:,1]]
+
+        dcxx_traj = dcxx[trajs_disc[:,0], trajs_disc[:,1]]
+        dcxy_traj = dcxy[trajs_disc[:,0], trajs_disc[:,1]]
+
+        dcyy_traj = dcyy[trajs_disc[:,0], trajs_disc[:,1]]
+        dcyx_traj = dcyx[trajs_disc[:,0], trajs_disc[:,1]]
+
+        self.dcostmapdx = torch.stack([dcx_traj, dcy_traj]).T
+        # print(self.dcostmapdx.shape)
+        self.dcostmapdx2 = torch.stack([dcxx_traj, dcxy_traj, dcyx_traj, dcyy_traj]).T
+        # print(self.dcostmapdx2.shape)
+
+
+
 
     def terminal_cost_expansion(self, x, xref):
         #TODO CONFIRM ORDER

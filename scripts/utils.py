@@ -1,9 +1,27 @@
 import numpy as np
 import torch
 
+# def transformed_lib(pose, trajs):
+#
+#     lib = trajs[:,:,:2].clone()
+#
+#     submat = pose[:3, :3]
+#     yaw = -np.arctan2(submat[1, 0], submat[0, 0]) + np.pi/2
+#
+#     rotation_matrix = np.array([[np.cos(yaw), -np.sin(yaw)],
+#                                 [np.sin(yaw), np.cos(yaw)]])
+#
+#     points = lib.reshape(-1,2)
+#
+#     rotated_points = points @ rotation_matrix.T
+#
+#     points = rotated_points.reshape(trajs.shape[0],-1,2)
+#
+#     return points
+
 def transformed_lib(pose, trajs):
 
-    lib = trajs[:,:,:2].clone()
+    lib = trajs[:,:2].clone()
 
     submat = pose[:3, :3]
     yaw = -np.arctan2(submat[1, 0], submat[0, 0]) + np.pi/2
@@ -15,9 +33,9 @@ def transformed_lib(pose, trajs):
 
     rotated_points = points @ rotation_matrix.T
 
-    points = rotated_points.reshape(trajs.shape[0],-1,2)
+    # points = rotated_points.reshape(trajs.shape[0],-1,2)
 
-    return points
+    return rotated_points
 
 def pose_msg_to_se3(msg):
         # quaternion_msg = msg[3:7]
