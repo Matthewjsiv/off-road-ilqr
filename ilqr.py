@@ -6,8 +6,10 @@ from utils import *
 import matplotlib.pyplot as plt
 import cv2
 
+torch.manual_seed(0)
+
 class ILQR(object):
-    def __init__(self, model, Q, R, Qf, iterations = 1, tol = 1e-3):
+    def __init__(self, model, Q, R, Qf, iterations = 50, tol = 1e-3):
         self.model = model
         self.iterations = iterations
         self.tol = tol
@@ -15,6 +17,7 @@ class ILQR(object):
         self.Q = torch.FloatTensor(Q)
         self.R = torch.FloatTensor(R)
         self.Qf = torch.FloatTensor(Qf)
+        self.Qc = torch.FloatTensor([.01])
         self.nx = 3
         self.nu = 2
 
@@ -27,28 +30,56 @@ class ILQR(object):
 
         # self.obs = observation
         self.costmap = observation['costmap']
+        # self.costmap = torch.zeros_like(self.costmap)
         self.obs = observation['state']
         self.res = observation['res']
 
         Xi = Xref[0]
-        U = Uref
+        U = Uref + torch.randn(Uref.shape)*.1
 
-        #X
         X = self.model.rollout(Xi.unsqueeze(0), U.unsqueeze(0))
-        # print(X)
         X = X[0]
 
+        
+        #plt.show()
 
         for i in range(self.iterations):
 
             # now = time.perf_counter()
             d,K, delta_J = self.backward_pass(X, U, Xref, Uref)
-            # X,u, J = self.forward_pass(X,U,d,K)
+            X,U, J = self.forward_pass(X,U,d,K, Xref, Uref)
 
-            # if delta_J < self.tol:
-                # return X, U, K
+            # plt.plot(Xref[:,0], Xref[:,1])
+            # plt.plot(Xref[:,0], Xref[:,1])
+            
+            # plt.show()
 
-        print(time.perf_counter() - now)
+            print(delta_J)
+
+            if delta_J < self.tol:
+                plt.show()
+                print(time.perf_counter() - now)
+
+                costmap = self.costmap
+                odom = self.obs
+                res = self.res
+                pose_se3 = pose_msg_to_se3(odom)
+                #we're just using this for rotation
+                traj = transformed_lib(pose_se3, X)
+
+                traj = ((traj - np.array([-30., -30])) / res)
+
+                traj_ref = transformed_lib(pose_se3, Xref)
+
+                traj_ref = ((traj_ref - np.array([-30., -30])) / res)
+
+
+                plt.imshow(costmap,origin='lower', extent=[-30,30,-30,30])
+                plt.plot(traj_ref[:,0], traj_ref[:,1])
+                plt.plot(traj[:,0], traj[:,1])
+                plt.show()
+
+                return X, U, K
 
         print("FAILED TO CONVERGE :o")
         return None
@@ -63,6 +94,12 @@ class ILQR(object):
         K = [torch.zeros([self.nu,self.nx])] * (N-1)
 
         dJdx2, dJdx = self.terminal_cost_expansion(X[-1].unsqueeze(0), Xref[-1].unsqueeze(0))
+
+        P[-1] = dJdx2
+        p[-1] = dJdx
+
+        # print(dJdx2, dJdx)
+
         dJ = 0.0
 
         # print(X)
@@ -74,8 +111,7 @@ class ILQR(object):
             # print(dJdx2.shape, dJdx.shape)
 
             #TODO actually do this
-            A = torch.zeros([3,3])
-            B = torch.zeros([3,2])
+            A, B = self.model.dynamics_jacobians(X[k], U[k])
 
             # print(dJdx.dtype, A.dtype, p[0].dtype)
             gx = dJdx + A.T @ p[k+1]
@@ -99,39 +135,71 @@ class ILQR(object):
             dJ += gu.T @ d[k]
 
         return d, K, dJ
+    
+    def forward_pass(self, X, U, d, K, Xref, Uref, tol = 1e-4):
+        Xn = torch.zeros_like(X)
+        Un = torch.zeros_like(U)
 
+        Xn[0] = X[0]
 
+        a = 1.0
 
-    def costmap_cost(x):
+        J = self.trajectory_cost(X, U, Xref, Uref)
+        for i in range(25):
+            for k in range(X.shape[0] - 1):
+                Un[k] = U[k] - a*d[k].flatten() - K[k] @ (Xn[k]-X[k])
+                Xn[k+1] = self.model.predict(Xn[k].unsqueeze(0), Un[k].unsqueeze(0))
+
+            #print(torch.linalg.norm(Xn-X))
+
+            Jn = self.trajectory_cost(Xn, Un, Xref, Uref)
+            if Jn < J + tol:
+                return Xn, Un, J
+            
+            a = 0.5 * a
+
+        raise Exception("Line search didn't converge")
+    
+    def trajectory_cost(self, X, U, Xref, Uref):
+        J = 0
+
+        for k in range(X.shape[0] - 1):
+            J += self.stage_cost(X[k], U[k], Xref[k], Uref[k])
+
+        J += self.terminal_cost(X[k], Xref[k])
+
+        return J
+
+    def costmap_cost(self, x):
         """
         rn assuming one coordinate but we should vectorize it back later since not needed for backward pass
         """
-        costmap = self.obs['local_costmap_data'][t][0].numpy()
-        odom = self.obs['state'][t]
-        res = self.obs['local_costmap_resolution'][t][0].item() #assuming square
+        costmap = self.costmap
+        odom = self.obs
+        res = self.res
         pose_se3 = pose_msg_to_se3(odom)
         #we're just using this for rotation
-        x[:,:2] = transformed_lib(pose_se3, np.expand_dims(x,0))
+        traj = transformed_lib(pose_se3, x.unsqueeze(0))
 
-        xdisc = ((x[:,:2] - np.array([-30., -30]).reshape(1, 2)) / res).int()
+        xdisc = ((traj - np.array([-30., -30])) / res).long()
 
-        cost = costmap[xdisc[0,0], xdisc[0,1]]
+        cost = costmap[xdisc[:,0], xdisc[:,1]]
 
-        return cost
+        return cost * self.Qc
 
     def stage_cost(self, x, u, xref, uref):
         # tracking_cost = .5*(np.sum((X-Xref)**2))*
         tracking_cost = .5*(x-xref).T @ self.Q @ (x-xref) + .5*(u-uref).T @ self.R @ (u-uref)
 
-        costmap_cost = self.costmap_cost(x.copy())
+        costmap_cost = self.costmap_cost(x.clone())
 
         return tracking_cost + costmap_cost
 
     def terminal_cost(self, x, xref):
         # tracking_cost = .5*(np.sum((X-Xref)**2))*
-        tracking_cost = .5*(x-xref).T @ self.Qf @ (u-uref)
+        tracking_cost = .5*(x-xref).T @ self.Qf @ (x-xref)
 
-        costmap_cost = self.costmap_cost(x.copy())
+        costmap_cost = self.costmap_cost(x.clone())
 
         return tracking_cost + costmap_cost
 
@@ -191,9 +259,9 @@ class ILQR(object):
         dcyy_traj = dcyy[trajs_disc[:,0], trajs_disc[:,1]]
         dcyx_traj = dcyx[trajs_disc[:,0], trajs_disc[:,1]]
 
-        self.dcostmapdx = torch.stack([dcx_traj, dcy_traj]).T
+        self.dcostmapdx = torch.stack([dcx_traj, dcy_traj]).T * self.Qc
         # print(self.dcostmapdx.shape)
-        self.dcostmapdx2 = torch.stack([dcxx_traj, dcxy_traj, dcyx_traj, dcyy_traj]).T
+        self.dcostmapdx2 = torch.stack([dcxx_traj, dcxy_traj, dcyx_traj, dcyy_traj]).T * self.Qc
         # print(self.dcostmapdx2.shape)
 
 

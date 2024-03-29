@@ -38,6 +38,21 @@ class KBM(Model):
         thd = v * d.tan() / self.L
         return torch.stack([xd, yd, thd], dim=-1)
 
+    def dynamics_jacobians(self, state, action):
+        x, y, th = state
+        v, d = action
+
+        A = torch.zeros(3,3)
+        A[0, 2] = -v * torch.sin(th)
+        A[1, 2] = v * torch.cos(th)
+
+        B = torch.zeros(3,2)
+        B[0, 0] = torch.cos(th)
+        B[0, 0] = torch.sin(th)
+        B[0, 1] = torch.tan(d) / self.L
+        B[2, 1] = v * (torch.cos(d) ** -2) / self.L
+
+        return A, B
 
     def predict(self, state, action):
         k1 = self.dynamics(state, action)

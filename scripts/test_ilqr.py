@@ -47,8 +47,8 @@ choice = 457
 Xref = X[choice]
 Uref = actions[choice]
 # print(Xref.shape, Uref.shape)
-plt.plot(Xref[:,0], Xref[:,1])
-plt.show()
+# plt.plot(Xref[:,0], Xref[:,1])
+# plt.show()
 
 all_obs = torch.load('../data/context_mppi_pipe_1.pt')['observation']
 
@@ -60,3 +60,5 @@ for i in range(100,900,50):
 
     ilqr = ILQR(kbm, np.eye(3), np.eye(2), np.eye(3))
     ilqr.run(Xref, Uref,observation)
+
+    break
