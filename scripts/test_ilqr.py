@@ -8,7 +8,8 @@ import sys
 sys.path.append("../")
 from models.kbm import KBM
 
-from ilqr import ILQR
+# from ilqr import ILQR
+from ilqr_exp_backup import ILQR
 # from ilqr_numba import ILQR
 
 
@@ -36,29 +37,55 @@ class TrajLib_offline(object):
 actions = torch.load('../data/vel_lib.pt')
 # print(actions.shape)
 
-kbm = KBM(L=3.0)
+kbm = KBM(L=3.0, max_steer=.3)
 
 # traj_lib = TrajLib_offline(dataset_file='../data/context_mppi_pipe_1.pt')
+
+actions[:,:,1] = 0.
 
 Xi = torch.Tensor([0,0,0])
 X = kbm.rollout(Xi, actions)
 
-choice = 457
+# choice = 457
+choice = 720
 Xref = X[choice]
 Uref = actions[choice]
 # print(Xref.shape, Uref.shape)
 # plt.plot(Xref[:,0], Xref[:,1])
 # plt.show()
+# s=rs
+
 
 all_obs = torch.load('../data/context_mppi_pipe_1.pt')['observation']
 
-for i in range(100,900,50):
-    # idx = 50
-    idx = i
-    # print(idx)
-    observation = {'costmap': all_obs['local_costmap_data'][idx][0], 'state': all_obs['state'][idx],'res': all_obs['local_costmap_resolution'][idx][0]}
+# for i in range(500,900,50):
+#     # idx = 50
+#     idx = i
+#     # print(idx)
+#     costmap = all_obs['local_costmap_data'][idx][0]
+#
+#     observation = {'costmap': costmap, 'state': all_obs['state'][idx],'res': all_obs['local_costmap_resolution'][idx][0]}
+#
+#     ilqr = ILQR(kbm, np.eye(3), np.eye(2), np.eye(3))
+#     ilqr.run(Xref, Uref,observation)
+#
+#     break
 
-    ilqr = ILQR(kbm, np.eye(3), np.eye(2), np.eye(3))
-    ilqr.run(Xref, Uref,observation)
+idx = 50
 
-    break
+costmap = all_obs['local_costmap_data'][idx][0]
+# print(costmap.shape)
+# costmap = torch.zeros(120,120).float()
+# costmap[40:65,80:120] = 1.
+
+costmap = np.zeros([120,120])
+costmap = cv2.circle(costmap, (72,64), 2,1.0, -1)
+costmap = cv2.circle(costmap, (85,57), 2,1.0, -1)
+# costmap = cv2.circle(costmap, (70,70), 5,1.0, -1)
+
+costmap = torch.Tensor(costmap).float()
+
+observation = {'costmap': costmap, 'state': all_obs['state'][idx],'res': all_obs['local_costmap_resolution'][idx][0]}
+
+ilqr = ILQR(kbm, np.eye(3), np.eye(2), np.eye(3))
+ilqr.run(Xref, Uref,observation)

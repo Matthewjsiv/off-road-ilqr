@@ -21,6 +21,7 @@ class KBM(Model):
         self.device = device
         self.u_ub = np.array([max_throttle, max_steer])
         self.u_lb = np.array([min_throttle, -max_steer])
+        self.max_steer = max_steer
 
     def observation_space(self):
         low = -np.ones(3).astype(float) * float('inf')
@@ -55,6 +56,12 @@ class KBM(Model):
         return A, B
 
     def predict(self, state, action):
+        # print(action)
+        # print(action.shape)
+        if torch.abs(action[0,1]) > self.max_steer:
+            # print("EXCEEDING CONTROLS")
+            ...
+
         k1 = self.dynamics(state, action)
         k2 = self.dynamics(state + (self.dt/2)*k1, action)
         k3 = self.dynamics(state + (self.dt/2)*k2, action)
